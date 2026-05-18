@@ -1,0 +1,469 @@
+#!/usr/bin/env python3
+import gi
+gi.require_version('Gtk', '4.0')
+from gi.repository import Gtk, Gdk, GLib, GdkPixbuf
+import subprocess, os, threading, datetime, shutil
+
+CSS = b"""
+window { background-color: #05081c; }
+.header { background-color: #080d1e; border-bottom: 1px solid #1e2d5a; }
+.store-title { color: #3d78d8; font-size: 20px; font-weight: bold; }
+.store-sub { color: #7b2ff7; font-size: 11px; }
+.label-white { color: #e0e8ff; font-size: 13px; }
+.label-blue { color: #3d78d8; font-size: 12px; }
+.label-gray { color: #6070a0; font-size: 11px; }
+.app-name { color: #e0e8ff; font-size: 13px; font-weight: bold; }
+.app-desc { color: #8090b0; font-size: 11px; }
+.app-card { background-color: #0d1530; border-radius: 12px; border: 1px solid #1e2d5a; }
+.app-card:hover { background-color: #111a3a; border: 1px solid #3d78d8; }
+.btn-install { background-color: #3d78d8; color: white; border-radius: 6px; padding: 5px 14px; font-size: 12px; font-weight: bold; border: none; min-width: 80px; }
+.btn-install:hover { background-color: #5590e8; }
+.btn-remove { background-color: #7b2ff7; color: white; border-radius: 6px; padding: 5px 14px; font-size: 12px; font-weight: bold; border: none; min-width: 80px; }
+.btn-remove:hover { background-color: #9050ff; }
+.btn-category { background-color: #0d1530; color: #a0b4d8; border-radius: 20px; padding: 5px 16px; font-size: 12px; border: 1px solid #1e2d5a; }
+.btn-category-active { background-color: #3d78d8; color: white; border-radius: 20px; padding: 5px 16px; font-size: 12px; border: none; }
+.search { background-color: #0d1530; color: #e0e8ff; border: 1px solid #3d78d8; border-radius: 20px; padding: 6px 14px; font-size: 13px; min-width: 300px; }
+.installed-badge { color: #00cc66; font-size: 10px; font-weight: bold; }
+.sidebar { background-color: #080d1e; border-right: 1px solid #1e2d5a; }
+.status-bar { background-color: #080d1e; border-top: 1px solid #1e2d5a; }
+.progress trough { background-color: #1a2040; border-radius: 2px; min-height: 4px; }
+.progress progress { background-color: #3d78d8; border-radius: 2px; }
+.backup-item { background-color: #0a1025; border-radius: 8px; border: 1px solid #1e2d5a; }
+"""
+
+APPS = {
+    'Internet': [
+        ('firefox', 'Navegador Web', 'Navegador rapido e seguro', 'firefox'),
+        ('thunderbird', 'Email', 'Cliente de email completo', 'thunderbird'),
+        ('chromium-browser', 'Chromium', 'Navegador baseado no Chrome', 'chromium-browser'),
+        ('transmission-gtk', 'Transmission', 'Cliente BitTorrent', 'transmission'),
+        ('filezilla', 'FileZilla', 'Cliente FTP', 'filezilla'),
+        ('wget', 'Wget', 'Downloader via terminal', 'utilities-terminal'),
+    ],
+    'Desenvolvimento': [
+        ('code', 'VS Code', 'Editor de codigo profissional', 'code'),
+        ('vim', 'Vim', 'Editor de texto avancado', 'utilities-terminal'),
+        ('git', 'Git', 'Controle de versao', 'utilities-terminal'),
+        ('python3', 'Python 3', 'Linguagem de programacao', 'utilities-terminal'),
+        ('nodejs', 'Node.js', 'Runtime JavaScript', 'utilities-terminal'),
+        ('docker.io', 'Docker', 'Containers Linux', 'utilities-terminal'),
+        ('build-essential', 'Build Tools', 'Ferramentas de compilacao', 'utilities-terminal'),
+    ],
+    'Multimidia': [
+        ('vlc', 'VLC', 'Reprodutor de midia universal', 'vlc'),
+        ('gimp', 'GIMP', 'Editor de imagens profissional', 'gimp'),
+        ('inkscape', 'Inkscape', 'Editor vetorial', 'inkscape'),
+        ('audacity', 'Audacity', 'Editor de audio', 'audacity'),
+        ('kdenlive', 'Kdenlive', 'Editor de video', 'kdenlive'),
+        ('obs-studio', 'OBS Studio', 'Gravacao e streaming', 'obs'),
+    ],
+    'Office': [
+        ('libreoffice', 'LibreOffice', 'Suite de escritorio completa', 'libreoffice-startcenter'),
+        ('evince', 'Evince', 'Leitor de PDF', 'evince'),
+        ('gedit', 'Gedit', 'Editor de texto simples', 'gedit'),
+        ('gnome-calendar', 'Calendario', 'Calendario do GNOME', 'gnome-calendar'),
+    ],
+    'Sistema': [
+        ('gparted', 'GParted', 'Gerenciador de particoes', 'gparted'),
+        ('htop', 'Htop', 'Monitor de processos', 'utilities-system-monitor'),
+        ('neofetch', 'Neofetch', 'Info do sistema no terminal', 'utilities-terminal'),
+        ('timeshift', 'Timeshift', 'Backup do sistema', 'timeshift'),
+        ('bleachbit', 'BleachBit', 'Limpeza do sistema', 'bleachbit'),
+        ('stacer', 'Stacer', 'Otimizador do sistema', 'stacer'),
+    ],
+    'Jogos': [
+        ('steam', 'Steam', 'Plataforma de jogos', 'steam'),
+        ('lutris', 'Lutris', 'Gerenciador de jogos', 'lutris'),
+        ('wine', 'Wine', 'Compatibilidade Windows', 'wine'),
+        ('gamemode', 'GameMode', 'Otimizador para jogos', 'applications-games'),
+    ],
+    'Seguranca': [
+        ('ufw', 'UFW', 'Firewall simples', 'security-high'),
+        ('clamav', 'ClamAV', 'Antivirus open source', 'security-medium'),
+        ('wireshark', 'Wireshark', 'Analisador de rede', 'wireshark'),
+        ('keepassxc', 'KeePassXC', 'Gerenciador de senhas', 'keepassxc'),
+    ],
+}
+
+BACKUP_DIR = '/var/backups/stackos'
+MAX_BACKUPS = 3
+
+def run(cmd, check=False):
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+def is_installed(pkg):
+    r = run(f"dpkg -l {pkg} 2>/dev/null | grep '^ii'")
+    return bool(r.stdout.strip())
+
+def do_backup():
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    dest = f"{BACKUP_DIR}/{timestamp}"
+    os.makedirs(dest, exist_ok=True)
+    latest = f"{BACKUP_DIR}/latest"
+    link = f"--link-dest={latest}" if os.path.exists(latest) else ""
+    run(f"rsync -aAX --delete {link} / {dest}/ --exclude=/proc --exclude=/sys --exclude=/dev --exclude=/tmp --exclude=/run --exclude={BACKUP_DIR}")
+    if os.path.islink(latest):
+        os.remove(latest)
+    os.symlink(dest, latest)
+    backups = sorted([d for d in os.listdir(BACKUP_DIR) if d != 'latest'])
+    while len(backups) > MAX_BACKUPS:
+        shutil.rmtree(f"{BACKUP_DIR}/{backups[0]}", ignore_errors=True)
+        backups.pop(0)
+    return timestamp
+
+def get_icon(icon_name, size=48):
+    theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
+    try:
+        paintable = theme.lookup_icon(icon_name, None, size, 1, Gtk.TextDirection.LTR, 0)
+        if paintable:
+            return paintable
+    except:
+        pass
+    try:
+        paintable = theme.lookup_icon('application-x-executable', None, size, 1, Gtk.TextDirection.LTR, 0)
+        return paintable
+    except:
+        return None
+
+class StackOSStore(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id='com.stackos.store')
+        self.connect('activate', self.on_activate)
+        self.current_category = 'Internet'
+
+    def on_activate(self, app):
+        provider = Gtk.CssProvider()
+        provider.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        self.win = Gtk.ApplicationWindow(application=app)
+        self.win.set_title("StackOS Store")
+        self.win.set_default_size(1000, 650)
+        self.build_ui()
+        self.win.present()
+
+    def build_ui(self):
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+
+        # Header
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header.add_css_class('header')
+        header.set_margin_top(10)
+        header.set_margin_bottom(10)
+        header.set_margin_start(16)
+        header.set_margin_end(16)
+
+        title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        t = Gtk.Label(label="StackOS Store")
+        t.add_css_class('store-title')
+        t.set_halign(Gtk.Align.START)
+        title_box.append(t)
+        s = Gtk.Label(label="POWERED BY MOSA")
+        s.add_css_class('store-sub')
+        s.set_halign(Gtk.Align.START)
+        title_box.append(s)
+        header.append(title_box)
+
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        header.append(spacer)
+
+        self.search = Gtk.SearchEntry()
+        self.search.add_css_class('search')
+        self.search.set_placeholder_text("Buscar aplicativos...")
+        self.search.connect('search-changed', self.on_search)
+        header.append(self.search)
+
+        vbox.append(header)
+
+        # Category bar
+        cat_scroll = Gtk.ScrolledWindow()
+        cat_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+        cat_scroll.set_margin_top(8)
+        cat_scroll.set_margin_bottom(8)
+        cat_scroll.set_margin_start(12)
+        cat_scroll.set_margin_end(12)
+
+        cat_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+
+        self.cat_buttons = {}
+        for cat in list(APPS.keys()) + ['Backups']:
+            btn = Gtk.Button(label=cat)
+            btn.add_css_class('btn-category')
+            btn.connect('clicked', self.on_category, cat)
+            self.cat_buttons[cat] = btn
+            cat_box.append(btn)
+
+        cat_scroll.set_child(cat_box)
+        vbox.append(cat_scroll)
+
+        # Status + progress
+        self.status_bar = Gtk.Label(label="")
+        self.status_bar.add_css_class('label-blue')
+        self.status_bar.set_halign(Gtk.Align.START)
+        self.status_bar.set_margin_start(16)
+        self.status_bar.set_margin_bottom(4)
+        vbox.append(self.status_bar)
+
+        self.progress = Gtk.ProgressBar()
+        self.progress.add_css_class('progress')
+        self.progress.set_margin_start(16)
+        self.progress.set_margin_end(16)
+        self.progress.set_margin_bottom(6)
+        self.progress.set_visible(False)
+        vbox.append(self.progress)
+
+        # Content scroll
+        self.scroll = Gtk.ScrolledWindow()
+        self.scroll.set_vexpand(True)
+        self.scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        vbox.append(self.scroll)
+
+        self.win.set_child(vbox)
+        self.show_category('Internet')
+
+    def on_category(self, btn, cat):
+        for c, b in self.cat_buttons.items():
+            b.remove_css_class('btn-category-active')
+            b.add_css_class('btn-category')
+        self.cat_buttons[cat].remove_css_class('btn-category')
+        self.cat_buttons[cat].add_css_class('btn-category-active')
+        self.show_category(cat)
+
+    def on_search(self, entry):
+        term = entry.get_text().strip().lower()
+        if term:
+            self.show_search(term)
+        else:
+            self.show_category(self.current_category)
+
+    def show_category(self, cat):
+        self.current_category = cat
+        if cat == 'Backups':
+            self.show_backups()
+            return
+        apps = APPS.get(cat, [])
+        self.show_apps(apps)
+
+    def show_search(self, term):
+        r = run(f"apt-cache search {term} 2>/dev/null | head -30")
+        apps = []
+        for line in r.stdout.splitlines():
+            if ' - ' in line:
+                name, desc = line.split(' - ', 1)
+                apps.append((name.strip(), name.strip().title(), desc.strip()[:60], 'application-x-executable'))
+        self.show_apps(apps)
+
+    def show_apps(self, apps):
+        flow = Gtk.FlowBox()
+        flow.set_valign(Gtk.Align.START)
+        flow.set_max_children_per_line(4)
+        flow.set_min_children_per_line(2)
+        flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        flow.set_row_spacing(10)
+        flow.set_column_spacing(10)
+        flow.set_margin_top(10)
+        flow.set_margin_bottom(10)
+        flow.set_margin_start(12)
+        flow.set_margin_end(12)
+
+        for app_data in apps:
+            pkg, name, desc, icon = app_data[0], app_data[1], app_data[2], app_data[3]
+            card = self.make_app_card(pkg, name, desc, icon)
+            flow.append(card)
+
+        if not apps:
+            lbl = Gtk.Label(label="Nenhum aplicativo encontrado.")
+            lbl.add_css_class('label-gray')
+            lbl.set_margin_top(60)
+            self.scroll.set_child(lbl)
+            return
+
+        self.scroll.set_child(flow)
+
+    def make_app_card(self, pkg, name, desc, icon_name):
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        card.add_css_class('app-card')
+        card.set_size_request(200, 160)
+        card.set_margin_top(4)
+        card.set_margin_bottom(4)
+        card.set_margin_start(4)
+        card.set_margin_end(4)
+
+        # Icon
+        icon_box = Gtk.Box()
+        icon_box.set_halign(Gtk.Align.CENTER)
+        icon_box.set_margin_top(16)
+
+        img = Gtk.Image()
+        img.set_from_icon_name(icon_name)
+        img.set_pixel_size(52)
+        icon_box.append(img)
+        card.append(icon_box)
+
+        # Name
+        name_lbl = Gtk.Label(label=name)
+        name_lbl.add_css_class('app-name')
+        name_lbl.set_halign(Gtk.Align.CENTER)
+        name_lbl.set_ellipsize(3)
+        card.append(name_lbl)
+
+        # Desc
+        desc_lbl = Gtk.Label(label=desc[:45] + ('...' if len(desc) > 45 else ''))
+        desc_lbl.add_css_class('app-desc')
+        desc_lbl.set_halign(Gtk.Align.CENTER)
+        desc_lbl.set_justify(Gtk.Justification.CENTER)
+        desc_lbl.set_wrap(True)
+        desc_lbl.set_margin_start(8)
+        desc_lbl.set_margin_end(8)
+        card.append(desc_lbl)
+
+        # Button
+        installed = is_installed(pkg)
+        btn_box = Gtk.Box()
+        btn_box.set_halign(Gtk.Align.CENTER)
+        btn_box.set_margin_bottom(12)
+        btn_box.set_margin_top(4)
+        btn_box.set_vexpand(True)
+        btn_box.set_valign(Gtk.Align.END)
+
+        if installed:
+            status = Gtk.Label(label="✓ Instalado")
+            status.add_css_class('installed-badge')
+            status.set_margin_bottom(4)
+            card.append(status)
+            btn = Gtk.Button(label="Remover")
+            btn.add_css_class('btn-remove')
+        else:
+            btn = Gtk.Button(label="Instalar")
+            btn.add_css_class('btn-install')
+
+        btn.connect('clicked', lambda b, p=pkg: self.on_install_remove(p, installed))
+        btn_box.append(btn)
+        card.append(btn_box)
+
+        return card
+
+    def on_install_remove(self, pkg, installed):
+        if installed:
+            self.status_bar.set_text(f"Removendo {pkg}...")
+            self.progress.set_visible(True)
+            def do():
+                GLib.idle_add(self.progress.pulse)
+                run(f"apt-get remove -y {pkg} 2>&1")
+                GLib.idle_add(self.status_bar.set_text, f"{pkg} removido.")
+                GLib.idle_add(self.progress.set_visible, False)
+                GLib.idle_add(self.show_category, self.current_category)
+            threading.Thread(target=do, daemon=True).start()
+        else:
+            self.status_bar.set_text(f"Fazendo backup e instalando {pkg}...")
+            self.progress.set_visible(True)
+            def do():
+                GLib.idle_add(self.progress.pulse)
+                try:
+                    ts = do_backup()
+                    GLib.idle_add(self.status_bar.set_text, f"Backup {ts} OK. Instalando {pkg}...")
+                except Exception as e:
+                    GLib.idle_add(self.status_bar.set_text, f"Instalando {pkg}...")
+                GLib.idle_add(self.progress.pulse)
+                run(f"apt-get install -y {pkg} 2>&1")
+                GLib.idle_add(self.status_bar.set_text, f"{pkg} instalado.")
+                GLib.idle_add(self.progress.set_visible, False)
+                GLib.idle_add(self.show_category, self.current_category)
+            threading.Thread(target=do, daemon=True).start()
+
+    def show_backups(self):
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        vbox.set_margin_top(16)
+        vbox.set_margin_start(16)
+        vbox.set_margin_end(16)
+        vbox.set_margin_bottom(16)
+
+        title = Gtk.Label(label="Backups do Sistema")
+        title.add_css_class('store-title')
+        title.set_halign(Gtk.Align.START)
+        title.set_margin_bottom(10)
+        vbox.append(title)
+
+        if not os.path.exists(BACKUP_DIR):
+            lbl = Gtk.Label(label="Nenhum backup encontrado.")
+            lbl.add_css_class('label-gray')
+            vbox.append(lbl)
+            self.scroll.set_child(vbox)
+            return
+
+        backups = sorted([d for d in os.listdir(BACKUP_DIR) if d != 'latest'], reverse=True)
+
+        if not backups:
+            lbl = Gtk.Label(label="Nenhum backup encontrado.")
+            lbl.add_css_class('label-gray')
+            vbox.append(lbl)
+            self.scroll.set_child(vbox)
+            return
+
+        for b in backups:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            row.add_css_class('backup-item')
+            row.set_margin_bottom(6)
+
+            info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            info.set_hexpand(True)
+            info.set_margin_top(12)
+            info.set_margin_bottom(12)
+            info.set_margin_start(16)
+
+            lbl = Gtk.Label(label=f"Backup: {b}")
+            lbl.add_css_class('label-white')
+            lbl.set_halign(Gtk.Align.START)
+            info.append(lbl)
+
+            path = f"{BACKUP_DIR}/{b}"
+            try:
+                size = subprocess.run(f"du -sh {path}", shell=True, capture_output=True, text=True).stdout.split()[0]
+                slbl = Gtk.Label(label=f"Tamanho: {size}")
+                slbl.add_css_class('label-gray')
+                slbl.set_halign(Gtk.Align.START)
+                info.append(slbl)
+            except:
+                pass
+
+            row.append(info)
+
+            btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            btns.set_valign(Gtk.Align.CENTER)
+            btns.set_margin_end(12)
+
+            rbtn = Gtk.Button(label="Restaurar")
+            rbtn.add_css_class('btn-install')
+            rbtn.connect('clicked', lambda b, p=path: self.restore_backup(p))
+            btns.append(rbtn)
+
+            dbtn = Gtk.Button(label="Apagar")
+            dbtn.add_css_class('btn-remove')
+            dbtn.connect('clicked', lambda b, p=path, n=b: self.delete_backup(p, n))
+            btns.append(dbtn)
+
+            row.append(btns)
+            vbox.append(row)
+
+        self.scroll.set_child(vbox)
+
+    def restore_backup(self, path):
+        self.status_bar.set_text(f"Restaurando backup...")
+        self.progress.set_visible(True)
+        def do():
+            run(f"rsync -aAX --delete {path}/ / --exclude=/proc --exclude=/sys --exclude=/dev --exclude=/tmp --exclude=/run --exclude={BACKUP_DIR}")
+            GLib.idle_add(self.status_bar.set_text, "Restaurado. Reinicie o sistema.")
+            GLib.idle_add(self.progress.set_visible, False)
+        threading.Thread(target=do, daemon=True).start()
+
+    def delete_backup(self, path, name):
+        shutil.rmtree(path, ignore_errors=True)
+        self.status_bar.set_text(f"Backup apagado.")
+        self.show_backups()
+
+app = StackOSStore()
+app.run([])

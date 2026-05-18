@@ -1,0 +1,772 @@
+#!/usr/bin/env python3
+import gi
+gi.require_version('Gtk', '4.0')
+from gi.repository import Gtk, Gdk, GLib, Pango
+import subprocess, sys, os, time, threading, re
+
+CSS = b"""
+window {
+    background-color: #05081c;
+}
+.title {
+    color: #3d78d8;
+    font-size: 24px;
+    font-weight: bold;
+}
+.subtitle {
+    color: #a0b4d8;
+    font-size: 13px;
+}
+.btn-primary {
+    background-color: #3d78d8;
+    color: white;
+    border-radius: 8px;
+    padding: 10px 24px;
+    font-size: 14px;
+    font-weight: bold;
+    border: none;
+}
+.btn-primary:hover {
+    background-color: #5590e8;
+}
+.btn-secondary {
+    background-color: #1a2040;
+    color: #a0b4d8;
+    border-radius: 8px;
+    padding: 10px 24px;
+    font-size: 14px;
+    border: 1px solid #3d78d8;
+}
+.btn-secondary:hover {
+    background-color: #232d50;
+}
+.btn-danger {
+    background-color: #7b2ff7;
+    color: white;
+    border-radius: 8px;
+    padding: 10px 24px;
+    font-size: 14px;
+    font-weight: bold;
+    border: none;
+}
+.card {
+    background-color: #0d1530;
+    border-radius: 12px;
+    padding: 20px;
+    border: 1px solid #1e2d5a;
+}
+.label-white {
+    color: #e0e8ff;
+    font-size: 14px;
+}
+.label-blue {
+    color: #3d78d8;
+    font-size: 13px;
+}
+.entry {
+    background-color: #0d1530;
+    color: #e0e8ff;
+    border: 1px solid #3d78d8;
+    border-radius: 6px;
+    padding: 8px;
+    font-size: 14px;
+}
+.radio {
+    color: #e0e8ff;
+    font-size: 14px;
+}
+.progress {
+    background-color: #1a2040;
+    border-radius: 4px;
+}
+.progress trough {
+    background-color: #1a2040;
+    border-radius: 4px;
+}
+.progress progress {
+    background-color: #3d78d8;
+    border-radius: 4px;
+}
+.separator {
+    background-color: #1e2d5a;
+}
+"""
+
+def run(cmd, check=True):
+    r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    if check and r.returncode != 0:
+        return None
+    return r
+
+class StackOSInstaller(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id='com.stackos.installer')
+        self.connect('activate', self.on_activate)
+        self.disk = ""
+        self.mode = ""
+        self.username = ""
+        self.password = ""
+        self.hostname = ""
+        self.locale = "pt_BR.UTF-8"
+        self.timezone = "America/Sao_Paulo"
+        self.efi = ""
+        self.root = ""
+
+    def on_activate(self, app):
+        provider = Gtk.CssProvider()
+        provider.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(),
+            provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        self.win = Gtk.ApplicationWindow(application=app)
+        self.win.set_title("Instalador StackOS Genesis")
+        self.win.set_default_size(700, 540)
+        self.win.set_resizable(False)
+        self.win.connect('close-request', self.on_close)
+        self.show_welcome()
+        self.win.present()
+
+    def on_close(self, win):
+        dialog = Gtk.AlertDialog()
+        dialog.set_message("Cancelar instalacao?")
+        dialog.set_detail("Tem certeza que deseja sair do instalador?")
+        dialog.set_buttons(["Continuar", "Sair"])
+        dialog.set_default_button(0)
+        dialog.set_cancel_button(0)
+        dialog.choose(self.win, None, self.on_close_response)
+        return True
+
+    def on_close_response(self, dialog, result):
+        btn = dialog.choose_finish(result)
+        if btn == 1:
+            self.quit()
+
+    def clear(self):
+        child = self.win.get_child()
+        if child:
+            self.win.set_child(None)
+
+    def make_header(self, subtitle=""):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        box.set_margin_bottom(20)
+        title = Gtk.Label(label="Instalador StackOS Genesis")
+        title.add_css_class('title')
+        box.append(title)
+        if subtitle:
+            sub = Gtk.Label(label=subtitle)
+            sub.add_css_class('subtitle')
+            box.append(sub)
+        sep = Gtk.Separator()
+        sep.add_css_class('separator')
+        sep.set_margin_top(10)
+        box.append(sep)
+        return box
+
+    def make_nav(self, back_cb=None, next_label="Proximo", next_cb=None, next_style='btn-primary'):
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        box.set_margin_top(20)
+        box.set_halign(Gtk.Align.END)
+        if back_cb:
+            btn_back = Gtk.Button(label="Voltar")
+            btn_back.add_css_class('btn-secondary')
+            btn_back.connect('clicked', back_cb)
+            box.append(btn_back)
+        btn_next = Gtk.Button(label=next_label)
+        btn_next.add_css_class(next_style)
+        if next_cb:
+            btn_next.connect('clicked', next_cb)
+        box.append(btn_next)
+        return box, btn_next
+
+    def show_welcome(self):
+        self.clear()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.set_margin_top(40)
+        box.set_margin_bottom(40)
+        box.set_margin_start(60)
+        box.set_margin_end(60)
+
+        logo = Gtk.Label(label="⚡ StackOS")
+        logo.add_css_class('title')
+        logo.set_margin_bottom(8)
+        box.append(logo)
+
+        gen = Gtk.Label(label="GENESIS 1.0")
+        gen.add_css_class('label-blue')
+        gen.set_margin_bottom(40)
+        box.append(gen)
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        card.add_css_class('card')
+        card.set_margin_bottom(30)
+
+        msg = Gtk.Label(label="Bem-vindo ao instalador oficial do StackOS Genesis.\n\nEste assistente ira guia-lo pelo processo de instalacao\ndo sistema no seu computador.\n\nModular. Leve. Poderoso.")
+        msg.add_css_class('label-white')
+        msg.set_justify(Gtk.Justification.CENTER)
+        msg.set_wrap(True)
+        card.append(msg)
+        box.append(card)
+
+        nav, btn = self.make_nav(next_label="Comecar", next_cb=lambda b: self.show_disk())
+        box.append(nav)
+        self.win.set_child(box)
+
+    def show_disk(self):
+        self.clear()
+        r = subprocess.run(['lsblk','-rno','NAME,TYPE,SIZE,RM'], capture_output=True, text=True)
+        disks = []
+        for line in r.stdout.splitlines():
+            p = line.split()
+            if len(p) >= 4 and p[1] == 'disk' and p[3] == '0':
+                disks.append((p[0], p[2]))
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.set_margin_top(30)
+        box.set_margin_bottom(30)
+        box.set_margin_start(60)
+        box.set_margin_end(60)
+        box.append(self.make_header("Selecione o disco de instalacao"))
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        card.add_css_class('card')
+        card.set_margin_bottom(20)
+
+        self.disk_radios = []
+        group = None
+        for name, size in disks:
+            rb = Gtk.CheckButton(label=f"/dev/{name}  —  {size}")
+            rb.add_css_class('radio')
+            if group is None:
+                group = rb
+            else:
+                rb.set_group(group)
+            rb.disk = f"/dev/{name}"
+            self.disk_radios.append(rb)
+            card.append(rb)
+
+        if self.disk_radios:
+            self.disk_radios[0].set_active(True)
+
+        box.append(card)
+        nav, btn = self.make_nav(
+            back_cb=lambda b: self.show_welcome(),
+            next_label="Proximo",
+            next_cb=lambda b: self.on_disk_next()
+        )
+        box.append(nav)
+        self.win.set_child(box)
+
+    def on_disk_next(self):
+        for rb in self.disk_radios:
+            if rb.get_active():
+                self.disk = rb.disk
+                break
+        if not self.disk:
+            return
+        self.show_mode()
+
+    def show_mode(self):
+        self.clear()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.set_margin_top(30)
+        box.set_margin_bottom(30)
+        box.set_margin_start(60)
+        box.set_margin_end(60)
+        box.append(self.make_header(f"Como instalar em {self.disk}"))
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        card.add_css_class('card')
+        card.set_margin_bottom(20)
+
+        self.rb_erase = Gtk.CheckButton(label="Apagar disco inteiro")
+        self.rb_erase.add_css_class('radio')
+        self.rb_erase.set_active(True)
+        card.append(self.rb_erase)
+
+        desc_erase = Gtk.Label(label="  Apaga tudo e instala o StackOS. Recomendado para instalacao limpa.")
+        desc_erase.add_css_class('label-blue')
+        desc_erase.set_halign(Gtk.Align.START)
+        card.append(desc_erase)
+
+        self.rb_dual = Gtk.CheckButton(label="Dual boot")
+        self.rb_dual.add_css_class('radio')
+        self.rb_dual.set_group(self.rb_erase)
+        card.append(self.rb_dual)
+
+        desc_dual = Gtk.Label(label="  Instala ao lado do sistema existente no espaco livre.")
+        desc_dual.add_css_class('label-blue')
+        desc_dual.set_halign(Gtk.Align.START)
+        card.append(desc_dual)
+
+        self.rb_manual = Gtk.CheckButton(label="Particionamento manual")
+        self.rb_manual.add_css_class('radio')
+        self.rb_manual.set_group(self.rb_erase)
+        card.append(self.rb_manual)
+
+        desc_manual = Gtk.Label(label="  Abre o GParted para particionar manualmente.")
+        desc_manual.add_css_class('label-blue')
+        desc_manual.set_halign(Gtk.Align.START)
+        card.append(desc_manual)
+
+        box.append(card)
+        nav, btn = self.make_nav(
+            back_cb=lambda b: self.show_disk(),
+            next_label="Proximo",
+            next_cb=lambda b: self.on_mode_next()
+        )
+        box.append(nav)
+        self.win.set_child(box)
+
+    def on_mode_next(self):
+        if self.rb_erase.get_active():
+            self.mode = 'erase'
+            self.show_confirm_erase()
+        elif self.rb_dual.get_active():
+            self.mode = 'dual'
+            self.show_dual_size()
+        else:
+            self.mode = 'manual'
+            subprocess.Popen(['gparted', self.disk])
+
+    def show_confirm_erase(self):
+        self.clear()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.set_margin_top(30)
+        box.set_margin_bottom(30)
+        box.set_margin_start(60)
+        box.set_margin_end(60)
+        box.append(self.make_header("Confirmacao"))
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        card.add_css_class('card')
+        card.set_margin_bottom(20)
+
+        warn = Gtk.Label(label=f"ATENCAO\n\nO disco {self.disk} sera completamente apagado.\nTodos os dados serao perdidos permanentemente.\n\nEsta acao nao pode ser desfeita.")
+        warn.add_css_class('label-white')
+        warn.set_justify(Gtk.Justification.CENTER)
+        warn.set_wrap(True)
+        card.append(warn)
+        box.append(card)
+
+        nav, btn = self.make_nav(
+            back_cb=lambda b: self.show_mode(),
+            next_label="Confirmar e continuar",
+            next_cb=lambda b: self.show_user(),
+            next_style='btn-danger'
+        )
+        box.append(nav)
+        self.win.set_child(box)
+
+    def show_dual_size(self):
+        self.clear()
+        parted_out = subprocess.run(['parted','-s',self.disk,'unit','MiB','print','free'], capture_output=True, text=True)
+        free_spaces = []
+        for line in parted_out.stdout.splitlines():
+            if 'Free Space' in line:
+                m = re.findall(r'([\d]+(?:[.,]\d+)?)MiB', line)
+                if len(m) >= 3:
+                    s = float(m[0].replace(',','.'))
+                    e = float(m[1].replace(',','.'))
+                    size = float(m[2].replace(',','.'))
+                    if size > 5000:
+                        free_spaces.append((s, e, size))
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.set_margin_top(30)
+        box.set_margin_bottom(30)
+        box.set_margin_start(60)
+        box.set_margin_end(60)
+        box.append(self.make_header("Dual Boot — Espaco para StackOS"))
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        card.add_css_class('card')
+        card.set_margin_bottom(20)
+
+        if not free_spaces:
+            msg = Gtk.Label(label="Nao ha espaco livre suficiente no disco.\nLibere pelo menos 5GB antes de continuar.")
+            msg.add_css_class('label-white')
+            card.append(msg)
+            box.append(card)
+            nav, _ = self.make_nav(back_cb=lambda b: self.show_mode())
+            box.append(nav)
+            self.win.set_child(box)
+            return
+
+        self.dual_start, self.dual_end, free_size = max(free_spaces, key=lambda x: x[2])
+        suggest = int(free_size * 0.8)
+
+        msg = Gtk.Label(label=f"Espaco livre disponivel: {int(free_size)} MB\nMinimo recomendado: 15000 MB")
+        msg.add_css_class('label-white')
+        msg.set_justify(Gtk.Justification.CENTER)
+        card.append(msg)
+
+        lbl = Gtk.Label(label="Tamanho para o StackOS (MB):")
+        lbl.add_css_class('label-blue')
+        lbl.set_halign(Gtk.Align.START)
+        lbl.set_margin_top(10)
+        card.append(lbl)
+
+        self.size_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 10000, int(free_size), 1024)
+        self.size_scale.set_value(suggest)
+        self.size_scale.set_draw_value(True)
+        self.size_scale.set_hexpand(True)
+        card.append(self.size_scale)
+
+        box.append(card)
+        nav, btn = self.make_nav(
+            back_cb=lambda b: self.show_mode(),
+            next_label="Proximo",
+            next_cb=lambda b: self.on_dual_next()
+        )
+        box.append(nav)
+        self.win.set_child(box)
+
+    def on_dual_next(self):
+        self.dual_size = int(self.size_scale.get_value())
+        self.show_user()
+
+    def show_user(self):
+        self.clear()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.set_margin_top(30)
+        box.set_margin_bottom(30)
+        box.set_margin_start(60)
+        box.set_margin_end(60)
+        box.append(self.make_header("Configurar usuario"))
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        card.add_css_class('card')
+        card.set_margin_bottom(20)
+
+        lbl_user = Gtk.Label(label="Nome do usuario:")
+        lbl_user.add_css_class('label-blue')
+        lbl_user.set_halign(Gtk.Align.START)
+        card.append(lbl_user)
+
+        self.entry_user = Gtk.Entry()
+        self.entry_user.add_css_class('entry')
+        self.entry_user.set_placeholder_text("ex: joao")
+        if self.username:
+            self.entry_user.set_text(self.username)
+        card.append(self.entry_user)
+
+        lbl_pass = Gtk.Label(label="Senha (deixe vazio para sem senha):")
+        lbl_pass.add_css_class('label-blue')
+        lbl_pass.set_halign(Gtk.Align.START)
+        lbl_pass.set_margin_top(8)
+        card.append(lbl_pass)
+
+        self.entry_pass = Gtk.Entry()
+        self.entry_pass.add_css_class('entry')
+        self.entry_pass.set_visibility(False)
+        self.entry_pass.set_placeholder_text("senha")
+        card.append(self.entry_pass)
+
+        lbl_conf = Gtk.Label(label="Confirmar senha:")
+        lbl_conf.add_css_class('label-blue')
+        lbl_conf.set_halign(Gtk.Align.START)
+        lbl_conf.set_margin_top(4)
+        card.append(lbl_conf)
+
+        self.entry_conf = Gtk.Entry()
+        self.entry_conf.add_css_class('entry')
+        self.entry_conf.set_visibility(False)
+        self.entry_conf.set_placeholder_text("confirmar senha")
+        card.append(self.entry_conf)
+
+        lbl_host = Gtk.Label(label="Nome do computador:")
+        lbl_host.add_css_class('label-blue')
+        lbl_host.set_halign(Gtk.Align.START)
+        lbl_host.set_margin_top(8)
+        card.append(lbl_host)
+
+        self.entry_host = Gtk.Entry()
+        self.entry_host.add_css_class('entry')
+        self.entry_host.set_placeholder_text("ex: meu-pc")
+        if self.hostname:
+            self.entry_host.set_text(self.hostname)
+        card.append(self.entry_host)
+
+        self.lbl_error = Gtk.Label(label="")
+        self.lbl_error.add_css_class('label-blue')
+        card.append(self.lbl_error)
+
+        box.append(card)
+        back_cb = lambda b: self.show_confirm_erase() if self.mode == 'erase' else self.show_dual_size()
+        nav, btn = self.make_nav(back_cb=back_cb, next_label="Proximo", next_cb=lambda b: self.on_user_next())
+        box.append(nav)
+        self.win.set_child(box)
+
+    def on_user_next(self):
+        user = self.entry_user.get_text().strip()
+        passwd = self.entry_pass.get_text()
+        conf = self.entry_conf.get_text()
+        host = self.entry_host.get_text().strip()
+
+        if not user:
+            self.lbl_error.set_text("Nome de usuario obrigatorio.")
+            return
+        if ' ' in user:
+            self.lbl_error.set_text("Nome de usuario nao pode ter espacos.")
+            return
+        if passwd != conf:
+            self.lbl_error.set_text("As senhas nao coincidem.")
+            return
+        if not host:
+            self.lbl_error.set_text("Nome do computador obrigatorio.")
+            return
+
+        self.username = user
+        self.password = passwd
+        self.hostname = host
+        self.show_locale()
+
+    def show_locale(self):
+        self.clear()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.set_margin_top(30)
+        box.set_margin_bottom(30)
+        box.set_margin_start(60)
+        box.set_margin_end(60)
+        box.append(self.make_header("Idioma e fuso horario"))
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        card.add_css_class('card')
+        card.set_margin_bottom(20)
+
+        lbl_loc = Gtk.Label(label="Idioma do sistema:")
+        lbl_loc.add_css_class('label-blue')
+        lbl_loc.set_halign(Gtk.Align.START)
+        card.append(lbl_loc)
+
+        locales = [('Portugues Brasil','pt_BR.UTF-8'),('English US','en_US.UTF-8'),('Espanol','es_ES.UTF-8')]
+        self.locale_combo = Gtk.DropDown.new_from_strings([l[0] for l in locales])
+        self.locale_combo.set_selected(0)
+        self.locale_values = [l[1] for l in locales]
+        card.append(self.locale_combo)
+
+        lbl_tz = Gtk.Label(label="Fuso horario:")
+        lbl_tz.add_css_class('label-blue')
+        lbl_tz.set_halign(Gtk.Align.START)
+        lbl_tz.set_margin_top(10)
+        card.append(lbl_tz)
+
+        timezones = [('Sao Paulo','America/Sao_Paulo'),('Lisboa','Europe/Lisbon'),('New York','America/New_York'),('London','Europe/London'),('UTC','UTC')]
+        self.tz_combo = Gtk.DropDown.new_from_strings([t[0] for t in timezones])
+        self.tz_combo.set_selected(0)
+        self.tz_values = [t[1] for t in timezones]
+        card.append(self.tz_combo)
+
+        box.append(card)
+        nav, btn = self.make_nav(
+            back_cb=lambda b: self.show_user(),
+            next_label="Instalar",
+            next_cb=lambda b: self.on_locale_next(),
+            next_style='btn-danger'
+        )
+        box.append(nav)
+        self.win.set_child(box)
+
+    def on_locale_next(self):
+        self.locale = self.locale_values[self.locale_combo.get_selected()]
+        self.timezone = self.tz_values[self.tz_combo.get_selected()]
+        self.show_installing()
+
+    def show_installing(self):
+        self.clear()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.set_margin_top(30)
+        box.set_margin_bottom(30)
+        box.set_margin_start(60)
+        box.set_margin_end(60)
+        box.append(self.make_header("Instalando StackOS Genesis..."))
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        card.add_css_class('card')
+        card.set_margin_bottom(20)
+        card.set_valign(Gtk.Align.CENTER)
+        card.set_vexpand(True)
+
+        self.lbl_status = Gtk.Label(label="Iniciando...")
+        self.lbl_status.add_css_class('label-white')
+        self.lbl_status.set_justify(Gtk.Justification.CENTER)
+        card.append(self.lbl_status)
+
+        self.progress = Gtk.ProgressBar()
+        self.progress.add_css_class('progress')
+        self.progress.set_pulse_step(0.05)
+        card.append(self.progress)
+
+        box.append(card)
+        self.win.set_child(box)
+
+        self.install_thread = threading.Thread(target=self.do_install, daemon=True)
+        self.install_thread.start()
+        GLib.timeout_add(100, self.pulse_progress)
+
+    def pulse_progress(self):
+        if self.install_thread.is_alive():
+            self.progress.pulse()
+            return True
+        return False
+
+    def set_status(self, msg):
+        GLib.idle_add(self.lbl_status.set_text, msg)
+
+    def do_install(self):
+        disk = self.disk
+
+        if self.mode == 'erase':
+            self.set_status("Particionando o disco...")
+            if "nvme" in disk:
+                self.efi = disk + "p1"
+                self.root = disk + "p2"
+            else:
+                self.efi = disk + "1"
+                self.root = disk + "2"
+            run("wipefs -af " + disk)
+            run("sgdisk --zap-all " + disk)
+            run("sgdisk -n 1:0:+300M -t 1:ef00 " + disk)
+            run("sgdisk -n 2:0:0 -t 2:8300 " + disk)
+            run("partprobe " + disk)
+            time.sleep(2)
+            run("mkfs.fat -F32 " + self.efi)
+            run("mkfs.ext4 -F " + self.root)
+
+        elif self.mode == 'dual':
+            self.set_status("Criando particoes para dual boot...")
+            efi_start = self.dual_start
+            efi_end = self.dual_start + 300
+            root_start = efi_end
+            root_end = root_start + self.dual_size
+            run(f"parted -s -a optimal {disk} mkpart primary fat32 {efi_start}MiB {efi_end}MiB")
+            run(f"parted -s -a optimal {disk} mkpart primary ext4 {root_start}MiB {root_end}MiB")
+            run(f"partprobe {disk}")
+            time.sleep(2)
+            lsblk2 = subprocess.run(['lsblk','-rno','NAME,FSTYPE,MOUNTPOINT'], capture_output=True, text=True)
+            disk_base = disk.replace('/dev/','')
+            new_parts = []
+            for line in lsblk2.stdout.splitlines():
+                parts = line.strip().split()
+                name = parts[0] if parts else ''
+                fstype = parts[1] if len(parts) > 1 else ''
+                mountpoint = parts[2] if len(parts) > 2 else ''
+                if disk_base in name and name != disk_base and fstype in ['','vfat','ext4'] and mountpoint == '':
+                    new_parts.append(f'/dev/{name}')
+            self.efi = new_parts[-2]
+            self.root = new_parts[-1]
+            run(f"mkfs.fat -F32 {self.efi}")
+            run(f"mkfs.ext4 -F {self.root}")
+
+        self.set_status("Montando particoes...")
+        run("mkdir -p /mnt/stackos-install")
+        run("mount " + self.root + " /mnt/stackos-install")
+        run("mkdir -p /mnt/stackos-install/boot/efi")
+        run("mount " + self.efi + " /mnt/stackos-install/boot/efi")
+
+        self.set_status("Copiando sistema... pode demorar varios minutos.")
+        run("unsquashfs -f -d /mnt/stackos-install /cdrom/casper/filesystem.squashfs")
+
+        self.set_status("Copiando kernel...")
+        run("cp -a /cdrom/casper/vmlinuz /mnt/stackos-install/boot/")
+        run("cp -a /cdrom/casper/initrd.img /mnt/stackos-install/boot/")
+
+        self.set_status("Configurando usuario e sistema...")
+        run("chroot /mnt/stackos-install userdel -r stackos", check=False)
+        run("chroot /mnt/stackos-install useradd -m -s /bin/bash -G sudo,adm,cdrom,dip,plugdev " + self.username)
+        if self.password:
+            subprocess.run("chroot /mnt/stackos-install chpasswd", input=self.username+":"+self.password+"\n", shell=True, capture_output=True, text=True)
+        else:
+            run("chroot /mnt/stackos-install passwd -d " + self.username, check=False)
+        with open("/mnt/stackos-install/etc/hostname", "w") as f:
+            f.write(self.hostname + "\n")
+        with open("/mnt/stackos-install/etc/hosts", "w") as f:
+            f.write("127.0.0.1 localhost\n127.0.1.1 " + self.hostname + "\n")
+        run("chroot /mnt/stackos-install ln -sf /usr/share/zoneinfo/" + self.timezone + " /etc/localtime", check=False)
+        with open("/mnt/stackos-install/etc/locale.gen", "a") as f:
+            f.write(self.locale + " UTF-8\n")
+        run("chroot /mnt/stackos-install locale-gen", check=False)
+        with open("/mnt/stackos-install/etc/default/locale", "w") as f:
+            f.write("LANG=" + self.locale + "\n")
+        with open("/mnt/stackos-install/etc/gdm3/custom.conf", "w") as f:
+            f.write("[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=" + self.username + "\n[security]\nAllowRoot=false\n")
+        import os
+        os.makedirs("/mnt/stackos-install/etc/polkit-1/rules.d", exist_ok=True)
+        with open("/mnt/stackos-install/etc/polkit-1/rules.d/10-stackos.rules", "w") as f:
+            f.write("polkit.addRule(function(action, subject) {\n    if (subject.isInGroup(\"sudo\")) {\n        return polkit.Result.YES;\n    }\n});\n")
+
+        self.set_status("Configurando fstab...")
+        root_uuid = run("blkid -s UUID -o value " + self.root).stdout.strip()
+        efi_uuid = run("blkid -s UUID -o value " + self.efi).stdout.strip()
+        fstab = "UUID=" + root_uuid + " / ext4 errors=remount-ro 0 1\n"
+        fstab += "UUID=" + efi_uuid + " /boot/efi vfat umask=0077 0 1\n"
+        with open("/mnt/stackos-install/etc/fstab", "w") as f:
+            f.write(fstab)
+
+        self.set_status("Instalando bootloader GRUB...")
+        run("mount --bind /dev /mnt/stackos-install/dev")
+        run("mount --bind /proc /mnt/stackos-install/proc")
+        run("mount --bind /sys /mnt/stackos-install/sys")
+        run("mount --bind /sys/firmware/efi/efivars /mnt/stackos-install/sys/firmware/efi/efivars", check=False)
+        run("chroot /mnt/stackos-install grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=StackOS  " + disk)
+        grub_cfg = "set default=0\nset timeout=5\n\nmenuentry 'StackOS Genesis' {\n    search --no-floppy --fs-uuid --set=root " + root_uuid + "\n    linux /boot/vmlinuz root=UUID=" + root_uuid + " quiet splash\n    initrd /boot/initrd.img\n}\n"
+        with open("/mnt/stackos-install/boot/grub/grub.cfg", "w") as f:
+            f.write(grub_cfg)
+        run("rm -f /mnt/stackos-install/etc/xdg/autostart/stackos-installer.desktop", check=False)
+        with open("/mnt/stackos-install/etc/apt/sources.list.d/stackos-online.list", "w") as f:
+            f.write("deb [trusted=yes] https://stackoslinux-dev.github.io/repo genesis main\n")
+        with open("/mnt/stackos-install/etc/dconf/db/local.d/01-stackos-dock", "w") as f:
+            f.write("[org/gnome/desktop/interface]\ngtk-theme='StackOS-Dark'\nicon-theme='Papirus-Dark'\n\n[org/gnome/shell]\nfavorite-apps=['org.gnome.Nautilus.desktop', 'firefox.desktop', 'org.gnome.Terminal.desktop', 'org.gnome.Settings.desktop', 'stackos-store.desktop', 'stackos-drivers.desktop']\n")
+        run("chroot /mnt/stackos-install dconf update", check=False)
+        with open("/mnt/stackos-install/etc/sudoers.d/stackos-user", "w") as f:
+            f.write("%sudo ALL=(ALL) NOPASSWD: ALL\n")
+        import os
+        os.chmod("/mnt/stackos-install/etc/sudoers.d/stackos-user", 0o440)
+
+        self.set_status("Finalizando...")
+        run("umount -lf /mnt/stackos-install/sys/firmware/efi/efivars", check=False)
+        run("umount -lf /mnt/stackos-install/dev", check=False)
+        run("umount -lf /mnt/stackos-install/proc", check=False)
+        run("umount -lf /mnt/stackos-install/sys", check=False)
+        run("umount -lf /mnt/stackos-install/boot/efi", check=False)
+        run("umount -lf /mnt/stackos-install", check=False)
+
+        GLib.idle_add(self.show_done)
+
+    def show_done(self):
+        self.clear()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.set_margin_top(60)
+        box.set_margin_bottom(40)
+        box.set_margin_start(60)
+        box.set_margin_end(60)
+
+        title = Gtk.Label(label="Instalacao Concluida")
+        title.add_css_class('title')
+        title.set_margin_bottom(8)
+        box.append(title)
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        card.add_css_class('card')
+        card.set_margin_top(20)
+        card.set_margin_bottom(30)
+
+        msg = Gtk.Label(label="O StackOS Genesis foi instalado com sucesso.\n\nRemova o pendrive e reinicie o computador\npara iniciar o sistema instalado.")
+        msg.add_css_class('label-white')
+        msg.set_justify(Gtk.Justification.CENTER)
+        msg.set_wrap(True)
+        card.append(msg)
+        box.append(card)
+
+        btn = Gtk.Button(label="Reiniciar agora")
+        btn.add_css_class('btn-primary')
+        btn.set_halign(Gtk.Align.CENTER)
+        btn.connect('clicked', lambda b: run("reboot", check=False))
+        box.append(btn)
+
+        self.win.set_child(box)
+
+app = StackOSInstaller()
+app.run(sys.argv)

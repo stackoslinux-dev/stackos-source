@@ -1,0 +1,557 @@
+#!/usr/bin/env python3
+import gi
+gi.require_version('Gtk', '4.0')
+from gi.repository import Gtk, Gdk, GLib
+import subprocess, threading, os
+
+CSS = b"""
+window { background-color: #05081c; }
+.title { color: #3d78d8; font-size: 20px; font-weight: bold; }
+.subtitle { color: #7b2ff7; font-size: 11px; }
+.label-white { color: #e0e8ff; font-size: 13px; }
+.label-blue { color: #3d78d8; font-size: 12px; }
+.label-gray { color: #6070a0; font-size: 11px; }
+.label-green { color: #00cc66; font-size: 12px; font-weight: bold; }
+.label-yellow { color: #ffcc00; font-size: 12px; font-weight: bold; }
+.label-red { color: #ff4444; font-size: 12px; }
+.card { background-color: #0d1530; border-radius: 12px; border: 1px solid #1e2d5a; }
+.hardware-card { background-color: #0a1025; border-radius: 10px; border: 1px solid #1e2d5a; }
+.btn-primary { background-color: #3d78d8; color: white; border-radius: 6px; padding: 6px 16px; font-size: 12px; font-weight: bold; border: none; }
+.btn-primary:hover { background-color: #5590e8; }
+.btn-danger { background-color: #7b2ff7; color: white; border-radius: 6px; padding: 6px 16px; font-size: 12px; font-weight: bold; border: none; }
+.btn-installed { background-color: #00cc66; color: white; border-radius: 6px; padding: 6px 16px; font-size: 12px; font-weight: bold; border: none; }
+.badge-recommended { background-color: #3d78d8; color: white; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: bold; }
+.badge-tested { background-color: #00aa44; color: white; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: bold; }
+.badge-proprietary { background-color: #7b2ff7; color: white; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: bold; }
+.badge-free { background-color: #1e2d5a; color: #a0b4d8; border-radius: 4px; padding: 2px 8px; font-size: 10px; }
+.progress trough { background-color: #1a2040; border-radius: 2px; min-height: 6px; }
+.progress progress { background-color: #3d78d8; border-radius: 2px; }
+"""
+
+def run(cmd):
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+def is_installed(pkg):
+    r = run(f"dpkg -l {pkg} 2>/dev/null | grep '^ii'")
+    return bool(r.stdout.strip())
+
+def detect_hardware():
+    devices = []
+
+    # GPU
+    gpu = run("lspci | grep -iE 'vga|3d|display'")
+    for line in gpu.stdout.splitlines():
+        if 'NVIDIA' in line.upper():
+            devices.append({
+                'type': 'GPU',
+                'name': line.split(':', 2)[-1].strip(),
+                'vendor': 'NVIDIA',
+                'icon': 'video-display'
+            })
+        elif 'AMD' in line.upper() or 'ATI' in line.upper():
+            devices.append({
+                'type': 'GPU',
+                'name': line.split(':', 2)[-1].strip(),
+                'vendor': 'AMD',
+                'icon': 'video-display'
+            })
+        elif 'INTEL' in line.upper():
+            devices.append({
+                'type': 'GPU',
+                'name': line.split(':', 2)[-1].strip(),
+                'vendor': 'Intel',
+                'icon': 'video-display'
+            })
+
+    # WiFi
+    wifi = run("lspci | grep -iE 'wireless|wifi|network'")
+    for line in wifi.stdout.splitlines():
+        devices.append({
+            'type': 'WiFi',
+            'name': line.split(':', 2)[-1].strip(),
+            'vendor': 'Generic',
+            'icon': 'network-wireless'
+        })
+
+    # USB devices
+    usb = run("lsusb | grep -iE 'wireless|bluetooth|wifi'")
+    for line in usb.stdout.splitlines():
+        devices.append({
+            'type': 'USB',
+            'name': line.split(':', 1)[-1].strip(),
+            'vendor': 'USB',
+            'icon': 'network-wireless'
+        })
+
+    return devices
+
+def get_drivers_for_device(device):
+    drivers = []
+    vendor = device['vendor']
+    dtype = device['type']
+
+    if vendor == 'NVIDIA':
+        # Verificar drivers NVIDIA disponíveis
+        r = run("apt-cache search nvidia-driver 2>/dev/null | grep '^nvidia-driver-' | sort -t'-' -k3 -rn | head -6")
+        for line in r.stdout.splitlines():
+            if ' - ' in line:
+                pkg, desc = line.split(' - ', 1)
+                pkg = pkg.strip()
+                ver = pkg.replace('nvidia-driver-', '')
+                try:
+                    ver_num = int(ver)
+                    tag = 'recommended' if ver_num >= 560 else 'tested'
+                except:
+                    tag = 'tested'
+                drivers.append({
+                    'pkg': pkg,
+                    'name': f'NVIDIA Driver {ver}',
+                    'desc': desc.strip(),
+                    'tag': tag,
+                    'type': 'proprietary'
+                })
+
+        # Driver livre nouveau
+        drivers.append({
+            'pkg': 'xserver-xorg-video-nouveau',
+            'name': 'Nouveau (Driver Livre)',
+            'desc': 'Driver open source para NVIDIA. Menor desempenho.',
+            'tag': 'free',
+            'type': 'free'
+        })
+
+    elif vendor == 'AMD':
+        drivers.append({
+            'pkg': 'xserver-xorg-video-amdgpu',
+            'name': 'AMDGPU (Recomendado)',
+            'desc': 'Driver open source oficial AMD. Recomendado para RX 400+.',
+            'tag': 'recommended',
+            'type': 'free'
+        })
+        drivers.append({
+            'pkg': 'xserver-xorg-video-radeon',
+            'name': 'Radeon (Legacy)',
+            'desc': 'Driver para placas AMD mais antigas.',
+            'tag': 'tested',
+            'type': 'free'
+        })
+        drivers.append({
+            'pkg': 'firmware-amd-graphics',
+            'name': 'AMD Firmware',
+            'desc': 'Firmware para aceleracao de hardware AMD.',
+            'tag': 'recommended',
+            'type': 'free'
+        })
+
+    elif vendor == 'Intel':
+        drivers.append({
+            'pkg': 'xserver-xorg-video-intel',
+            'name': 'Intel Driver (Recomendado)',
+            'desc': 'Driver open source oficial Intel.',
+            'tag': 'recommended',
+            'type': 'free'
+        })
+        drivers.append({
+            'pkg': 'intel-microcode',
+            'name': 'Intel Microcode',
+            'desc': 'Atualizacoes de microcódigo do processador Intel.',
+            'tag': 'recommended',
+            'type': 'free'
+        })
+
+    elif dtype == 'WiFi':
+        drivers.append({
+            'pkg': 'linux-firmware',
+            'name': 'Linux Firmware',
+            'desc': 'Firmware para dispositivos WiFi e Bluetooth.',
+            'tag': 'recommended',
+            'type': 'free'
+        })
+        drivers.append({
+            'pkg': 'firmware-b43-installer',
+            'name': 'Broadcom B43',
+            'desc': 'Driver para placas Broadcom BCM43xx.',
+            'tag': 'tested',
+            'type': 'proprietary'
+        })
+
+    return drivers
+
+class StackOSDrivers(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id='com.stackos.drivers')
+        self.connect('activate', self.on_activate)
+
+    def on_activate(self, app):
+        provider = Gtk.CssProvider()
+        provider.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        self.win = Gtk.ApplicationWindow(application=app)
+        self.win.set_title("StackOS Drivers")
+        self.win.set_default_size(800, 580)
+        self.build_ui()
+        self.win.present()
+
+    def build_ui(self):
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+
+        # Header
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header.set_margin_top(16)
+        header.set_margin_bottom(12)
+        header.set_margin_start(20)
+        header.set_margin_end(20)
+
+        icon = Gtk.Image.new_from_icon_name('preferences-system')
+        icon.set_pixel_size(40)
+        header.append(icon)
+
+        title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        t = Gtk.Label(label="StackOS Drivers")
+        t.add_css_class('title')
+        t.set_halign(Gtk.Align.START)
+        title_box.append(t)
+        s = Gtk.Label(label="Gerenciador de drivers do sistema")
+        s.add_css_class('subtitle')
+        s.set_halign(Gtk.Align.START)
+        title_box.append(s)
+        header.append(title_box)
+
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        header.append(spacer)
+
+        scan_btn = Gtk.Button(label="Verificar hardware")
+        scan_btn.add_css_class('btn-primary')
+        scan_btn.connect('clicked', lambda b: self.scan_hardware())
+        header.append(scan_btn)
+
+        vbox.append(header)
+
+        sep = Gtk.Separator()
+        sep.set_margin_bottom(8)
+        vbox.append(sep)
+
+        # Status
+        self.status = Gtk.Label(label="Clique em 'Verificar hardware' para detectar dispositivos.")
+        self.status.add_css_class('label-blue')
+        self.status.set_halign(Gtk.Align.START)
+        self.status.set_margin_start(20)
+        self.status.set_margin_bottom(6)
+        vbox.append(self.status)
+
+        self.progress = Gtk.ProgressBar()
+        self.progress.add_css_class('progress')
+        self.progress.set_margin_start(20)
+        self.progress.set_margin_end(20)
+        self.progress.set_margin_bottom(8)
+        self.progress.set_visible(False)
+        vbox.append(self.progress)
+
+        # Content
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+        self.content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.content.set_margin_top(8)
+        self.content.set_margin_start(20)
+        self.content.set_margin_end(20)
+        self.content.set_margin_bottom(20)
+
+        scroll.set_child(self.content)
+        vbox.append(scroll)
+
+        self.win.set_child(vbox)
+        self.scan_hardware()
+
+    def scan_hardware(self):
+        self.status.set_text("Detectando hardware...")
+        self.progress.set_visible(True)
+
+        while child := self.content.get_first_child():
+            self.content.remove(child)
+
+        def do():
+            GLib.idle_add(self.progress.pulse)
+            devices = detect_hardware()
+
+            # Também usar ubuntu-drivers
+            r = run("ubuntu-drivers devices 2>/dev/null")
+            ubuntu_drivers_output = r.stdout
+
+            GLib.idle_add(self.show_devices, devices, ubuntu_drivers_output)
+
+        threading.Thread(target=do, daemon=True).start()
+
+    def show_devices(self, devices, ubuntu_output):
+        self.progress.set_visible(False)
+
+        while child := self.content.get_first_child():
+            self.content.remove(child)
+
+        if not devices and not ubuntu_output.strip():
+            lbl = Gtk.Label(label="Nenhum dispositivo detectado.")
+            lbl.add_css_class('label-gray')
+            self.content.append(lbl)
+            self.status.set_text("Verificacao concluida.")
+            return
+
+        # Mostrar saida do ubuntu-drivers se disponivel
+        if ubuntu_output.strip():
+            self.show_ubuntu_drivers(ubuntu_output)
+        else:
+            for device in devices:
+                self.show_device_card(device)
+
+        self.status.set_text(f"Hardware detectado. Selecione os drivers para instalar.")
+
+    def show_ubuntu_drivers(self, output):
+        current_device = None
+        current_card = None
+        drivers_box = None
+
+        title = Gtk.Label(label="Dispositivos e Drivers Detectados")
+        title.add_css_class('label-white')
+        title.set_halign(Gtk.Align.START)
+        title.set_margin_bottom(8)
+        self.content.append(title)
+
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+
+            if line.startswith('=='):
+                continue
+            elif 'modalias' in line or 'vendor' in line or 'model' in line or 'driver' in line:
+                if 'model' in line.lower() or 'vendor' in line.lower():
+                    if current_card:
+                        self.content.append(current_card)
+
+                    current_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+                    current_card.add_css_class('hardware-card')
+                    current_card.set_margin_bottom(8)
+
+                    device_lbl = Gtk.Label(label=line.split(':', 1)[-1].strip() if ':' in line else line)
+                    device_lbl.add_css_class('label-white')
+                    device_lbl.set_halign(Gtk.Align.START)
+                    device_lbl.set_margin_top(12)
+                    device_lbl.set_margin_start(14)
+                    device_lbl.set_markup(f'<b>{line.split(":", 1)[-1].strip() if ":" in line else line}</b>')
+                    current_card.append(device_lbl)
+
+                    drivers_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+                    drivers_box.set_margin_start(14)
+                    drivers_box.set_margin_end(14)
+                    drivers_box.set_margin_bottom(12)
+                    current_card.append(drivers_box)
+
+                elif 'driver' in line.lower() and drivers_box:
+                    pkg = line.split(':', 1)[-1].strip() if ':' in line else line
+                    is_rec = 'recommended' in line.lower()
+                    self.add_driver_row(drivers_box, pkg, is_rec)
+
+        if current_card:
+            self.content.append(current_card)
+
+        # Adicionar drivers manuais por fabricante
+        gpu_info = run("lspci | grep -iE 'vga|3d'").stdout
+        if 'NVIDIA' in gpu_info.upper():
+            self.show_nvidia_drivers()
+
+    def show_nvidia_drivers(self):
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        card.add_css_class('hardware-card')
+        card.set_margin_bottom(8)
+
+        title = Gtk.Label()
+        title.set_markup('<b>NVIDIA - Drivers Disponiveis</b>')
+        title.add_css_class('label-white')
+        title.set_halign(Gtk.Align.START)
+        title.set_margin_top(12)
+        title.set_margin_start(14)
+        card.append(title)
+
+        drivers_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        drivers_box.set_margin_start(14)
+        drivers_box.set_margin_end(14)
+        drivers_box.set_margin_bottom(12)
+
+        r = run("apt-cache search nvidia-driver 2>/dev/null | grep '^nvidia-driver-[0-9]' | sort -t'-' -k3 -rn | head -5")
+        versions = []
+        for line in r.stdout.splitlines():
+            if ' - ' in line:
+                pkg = line.split(' - ')[0].strip()
+                versions.append(pkg)
+
+        for i, pkg in enumerate(versions):
+            ver = pkg.replace('nvidia-driver-', '')
+            is_rec = i == 0
+            desc = f"Driver NVIDIA versao {ver} {'(Recomendado)' if is_rec else '(Sem teste)'}"
+            self.add_driver_row(drivers_box, pkg, is_rec, desc)
+
+        card.append(drivers_box)
+        self.content.append(card)
+
+    def show_device_card(self, device):
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        card.add_css_class('hardware-card')
+        card.set_margin_bottom(8)
+
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        header.set_margin_top(12)
+        header.set_margin_start(14)
+        header.set_margin_end(14)
+
+        icon = Gtk.Image.new_from_icon_name(device.get('icon', 'hardware'))
+        icon.set_pixel_size(32)
+        header.append(icon)
+
+        info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        name = Gtk.Label(label=device['name'][:70])
+        name.add_css_class('label-white')
+        name.set_halign(Gtk.Align.START)
+        name.set_markup(f'<b>{device["name"][:70]}</b>')
+        info.append(name)
+
+        dtype = Gtk.Label(label=f"{device['type']} — {device['vendor']}")
+        dtype.add_css_class('label-gray')
+        dtype.set_halign(Gtk.Align.START)
+        info.append(dtype)
+
+        header.append(info)
+        card.append(header)
+
+        drivers = get_drivers_for_device(device)
+        if drivers:
+            drivers_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            drivers_box.set_margin_start(14)
+            drivers_box.set_margin_end(14)
+            drivers_box.set_margin_bottom(12)
+            drivers_box.set_margin_top(6)
+
+            for drv in drivers:
+                self.add_driver_row_full(drivers_box, drv)
+
+            card.append(drivers_box)
+
+        self.content.append(card)
+
+    def add_driver_row(self, box, pkg, recommended=False, desc=''):
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        row.set_margin_top(4)
+        row.set_margin_bottom(4)
+
+        info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        info.set_hexpand(True)
+
+        name_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        name_lbl = Gtk.Label(label=pkg)
+        name_lbl.add_css_class('label-white')
+        name_lbl.set_halign(Gtk.Align.START)
+        name_box.append(name_lbl)
+
+        if recommended:
+            badge = Gtk.Label(label="RECOMENDADO")
+            badge.add_css_class('badge-recommended')
+            name_box.append(badge)
+
+        info.append(name_box)
+
+        if desc:
+            desc_lbl = Gtk.Label(label=desc)
+            desc_lbl.add_css_class('label-gray')
+            desc_lbl.set_halign(Gtk.Align.START)
+            info.append(desc_lbl)
+
+        row.append(info)
+
+        installed = is_installed(pkg)
+        if installed:
+            btn = Gtk.Button(label="Instalado")
+            btn.add_css_class('btn-installed')
+            btn.set_sensitive(False)
+        else:
+            btn = Gtk.Button(label="Instalar")
+            btn.add_css_class('btn-primary')
+            btn.connect('clicked', lambda b, p=pkg: self.install_driver(p))
+
+        row.append(btn)
+        box.append(row)
+
+    def add_driver_row_full(self, box, drv):
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        row.set_margin_top(4)
+        row.set_margin_bottom(4)
+
+        info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        info.set_hexpand(True)
+
+        name_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        name_lbl = Gtk.Label(label=drv['name'])
+        name_lbl.add_css_class('label-white')
+        name_lbl.set_halign(Gtk.Align.START)
+        name_box.append(name_lbl)
+
+        tag = drv.get('tag', '')
+        if tag == 'recommended':
+            badge = Gtk.Label(label="RECOMENDADO")
+            badge.add_css_class('badge-recommended')
+            name_box.append(badge)
+        elif tag == 'tested':
+            badge = Gtk.Label(label="TESTADO")
+            badge.add_css_class('badge-tested')
+            name_box.append(badge)
+        elif tag == 'free':
+            badge = Gtk.Label(label="LIVRE")
+            badge.add_css_class('badge-free')
+            name_box.append(badge)
+
+        dtype = drv.get('type', '')
+        if dtype == 'proprietary':
+            pbadge = Gtk.Label(label="PROPRIETARIO")
+            pbadge.add_css_class('badge-proprietary')
+            name_box.append(pbadge)
+
+        info.append(name_box)
+
+        desc_lbl = Gtk.Label(label=drv.get('desc', '')[:80])
+        desc_lbl.add_css_class('label-gray')
+        desc_lbl.set_halign(Gtk.Align.START)
+        desc_lbl.set_wrap(True)
+        info.append(desc_lbl)
+
+        row.append(info)
+
+        installed = is_installed(drv['pkg'])
+        if installed:
+            btn = Gtk.Button(label="✓ Instalado")
+            btn.add_css_class('btn-installed')
+            btn.set_sensitive(False)
+        else:
+            btn = Gtk.Button(label="Instalar")
+            btn.add_css_class('btn-primary')
+            btn.connect('clicked', lambda b, p=drv['pkg']: self.install_driver(p))
+
+        row.append(btn)
+        box.append(row)
+
+    def install_driver(self, pkg):
+        self.status.set_text(f"Instalando {pkg}...")
+        self.progress.set_visible(True)
+
+        def do():
+            GLib.idle_add(self.progress.pulse)
+            run(f"apt-get install -y {pkg}")
+            GLib.idle_add(self.status.set_text, f"{pkg} instalado. Reinicie para aplicar.")
+            GLib.idle_add(self.progress.set_visible, False)
+            GLib.idle_add(self.scan_hardware)
+
+        threading.Thread(target=do, daemon=True).start()
+
+app = StackOSDrivers()
+app.run([])

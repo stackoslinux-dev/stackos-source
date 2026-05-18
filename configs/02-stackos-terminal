@@ -1,0 +1,9 @@
+[org/gnome/terminal/legacy/profiles:/:b1dcc9dd-5262-4d8d-a863-c897e6d979b9]
+background-color='#0a0d2e'
+foreground-color='#00ccff'
+bold-color='#7b2ff7'
+use-theme-colors=false
+use-system-font=false
+font='Monospace 11'
+background-transparency-percent=5
+use-transparent-background=true
