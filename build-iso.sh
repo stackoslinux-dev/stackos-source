@@ -24,11 +24,17 @@ mount --bind /sys ~/StackOS/chroot/sys
 
 # 4. Instalar pacotes base
 echo "[4/8] Instalando pacotes base..."
+# Adicionar repositorios necessarios
+chroot ~/StackOS/chroot bash -c 'echo "deb http://archive.ubuntu.com/ubuntu resolute main restricted universe multiverse" > /etc/apt/sources.list'
+chroot ~/StackOS/chroot apt-get update
 chroot ~/StackOS/chroot apt-get install -y \
   ubuntu-desktop-minimal gnome-shell gdm3 \
-  firefox network-manager network-manager-gnome \
-  gparted rsync fastfetch casper ubiquity-casper \
+  nm-connection-editor network-manager \
+  gparted rsync casper ubiquity-casper \
   papirus-icon-theme yaru-theme-gtk yaru-theme-icon
+# Instalar fastfetch do PPA
+chroot ~/StackOS/chroot add-apt-repository -y ppa:zhangsongcui3371/fastfetch
+chroot ~/StackOS/chroot apt-get install -y fastfetch
 
 # 5. Adicionar repositorio StackOS
 echo "[5/8] Adicionando repositorio StackOS..."
