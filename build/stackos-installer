@@ -711,15 +711,31 @@ class StackOSInstaller(Gtk.Application):
         run("mount --bind /sys /mnt/stackos-install/sys")
         run("mount --bind /sys/firmware/efi/efivars /mnt/stackos-install/sys/firmware/efi/efivars", check=False)
         run("chroot /mnt/stackos-install grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=StackOS  " + disk)
-        grub_cfg = "set default=0\nset timeout=5\n\nmenuentry 'StackOS Genesis' {\n    search --no-floppy --fs-uuid --set=root " + root_uuid + "\n    linux /boot/vmlinuz root=UUID=" + root_uuid + " quiet splash\n    initrd /boot/initrd.img\n}\n"
+        run("chroot /mnt/stackos-install grub-mkconfig -o /boot/grub/grub.cfg")
+        grub_cfg = "set default=0\nset timeout=5\n\nmenuentry 'StackOS Genesis' {\n    search --no-floppy --fs-uuid --set=root " + root_uuid + "\n    linux /boot/vmlinuz root=UUID=" + root_uuid + " quiet\n    initrd /boot/initrd.img\n}\n"
         with open("/mnt/stackos-install/boot/grub/grub.cfg", "w") as f:
             f.write(grub_cfg)
         run("rm -f /mnt/stackos-install/etc/xdg/autostart/stackos-installer.desktop", check=False)
-        with open("/mnt/stackos-install/etc/apt/sources.list.d/stackos-online.list", "w") as f:
-            f.write("deb [trusted=yes] https://stackoslinux-dev.github.io/repo genesis main\n")
+        run("rm -f /mnt/stackos-install/usr/share/applications/stackos-installer.desktop", check=False)
+        subprocess.run("rm -f /mnt/stackos-install/etc/apt/sources.list.d/stackos-local.list", shell=True)
+        with open("/mnt/stackos-install/etc/apt/sources.list.d/ubuntu.list", "w") as f:
+            f.write("""deb http://archive.ubuntu.com/ubuntu resolute main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu resolute-updates main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu resolute-security main restricted universe multiverse
+""")
+        with open("/mnt/stackos-install/etc/apt/sources.list.d/stackos.list", "w") as f:
+            f.write("deb [trusted=yes] https://stackoslinux-dev.github.io/repo/base genesis main\n")
+            f.write("deb [trusted=yes] https://stackoslinux-dev.github.io/repo/branding genesis main\n")
+            f.write("deb [trusted=yes] https://stackoslinux-dev.github.io/repo/apps genesis main\n")
+            f.write("deb [trusted=yes] https://stackoslinux-dev.github.io/repo/drivers genesis main\n")
+            f.write("deb [trusted=yes] https://stackoslinux-dev.github.io/repo/installer genesis main\n")
         with open("/mnt/stackos-install/etc/dconf/db/local.d/01-stackos-dock", "w") as f:
-            f.write("[org/gnome/desktop/interface]\ngtk-theme='StackOS-Dark'\nicon-theme='Papirus-Dark'\n\n[org/gnome/shell]\nfavorite-apps=['org.gnome.Nautilus.desktop', 'firefox.desktop', 'org.gnome.Terminal.desktop', 'org.gnome.Settings.desktop', 'stackos-store.desktop', 'stackos-drivers.desktop']\n")
+            f.write("[org/gnome/desktop/interface]\ngtk-theme='Orchis-Purple-Dark'\nicon-theme='Yaru-blue'\n\n[org/gnome/shell]\nfavorite-apps=['org.gnome.Nautilus.desktop', 'firefox.desktop', 'org.gnome.Terminal.desktop', 'org.gnome.Settings.desktop', 'stackos-store.desktop', 'stackos-drivers.desktop', 'stackos-bugreport.desktop']\n\n[org/gnome/shell/extensions/dash-to-dock]\ndash-max-icon-size=60\n")
         run("chroot /mnt/stackos-install dconf update", check=False)
+        import os
+        os.makedirs("/mnt/stackos-install/etc/NetworkManager", exist_ok=True)
+        with open("/mnt/stackos-install/etc/NetworkManager/NetworkManager.conf", "w") as f:
+            f.write("[main]\nplugins=ifupdown,keyfile\n[ifupdown]\nmanaged=true\n")
         with open("/mnt/stackos-install/etc/sudoers.d/stackos-user", "w") as f:
             f.write("%sudo ALL=(ALL) NOPASSWD: ALL\n")
         import os

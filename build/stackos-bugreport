@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+import gi
+gi.require_version('Gtk', '4.0')
+from gi.repository import Gtk, Gdk, GLib
+import subprocess, os, threading, json, urllib.request
+
+GITHUB_TOKEN = "STACKOS_GITHUB_TOKEN"
+GITHUB_REPO = "stackoslinux-dev/bugs"
+
+CSS = b"""
+window { background-color: #05081c; }
+.title { color: #3d78d8; font-size: 20px; font-weight: bold; }
+.label-white { color: #e0e8ff; font-size: 13px; }
+.label-blue { color: #3d78d8; font-size: 12px; }
+.card { background-color: #0d1530; border-radius: 12px; border: 1px solid #1e2d5a; }
+.btn-primary { background-color: #3d78d8; color: white; border-radius: 6px; padding: 8px 20px; font-weight: bold; border: none; }
+.btn-secondary { background-color: #1a2040; color: #a0b4d8; border-radius: 6px; padding: 8px 20px; border: 1px solid #3d78d8; }
+.entry { background-color: #0d1530; color: #e0e8ff; border: 1px solid #3d78d8; border-radius: 6px; padding: 8px; }
+"""
+
+def get_system_info():
+    info = {}
+    try:
+        info['os'] = subprocess.run("lsb_release -d", shell=True, capture_output=True, text=True).stdout.strip()
+        info['kernel'] = subprocess.run("uname -r", shell=True, capture_output=True, text=True).stdout.strip()
+        info['packages'] = subprocess.run("dpkg -l | grep stackos | awk '{print $2, $3}'", shell=True, capture_output=True, text=True).stdout.strip()
+        info['logs'] = subprocess.run("journalctl -n 50 --no-pager 2>/dev/null", shell=True, capture_output=True, text=True).stdout.strip()
+    except:
+        pass
+    return info
+
+def create_github_issue(title, description, info):
+    body = f"""**Descrição:**
+{description}
+
+**Sistema:**
+**Pacotes StackOS:**
+**Logs recentes:**
+"""
+    data = json.dumps({"title": title, "body": body, "labels": ["bug"]}).encode()
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{GITHUB_REPO}/issues",
+        data=data,
+        headers={
+            "Authorization": f"token {GITHUB_TOKEN}",
+            "Content-Type": "application/json",
+            "Accept": "application/vnd.github.v3+json"
+        }
+    )
+    try:
+        with urllib.request.urlopen(req) as r:
+            result = json.loads(r.read())
+            return result.get('html_url', '')
+    except Exception as e:
+        return str(e)
+
+class BugReport(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id='com.stackos.bugreport')
+        self.connect('activate', self.on_activate)
+
+    def on_activate(self, app):
+        provider = Gtk.CssProvider()
+        provider.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        self.win = Gtk.ApplicationWindow(application=app)
+        self.win.set_title("StackOS - Relatar Bug")
+        self.win.set_default_size(500, 400)
+        self.build_ui()
+        self.win.present()
+
+    def build_ui(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        box.set_margin_top(24)
+        box.set_margin_bottom(24)
+        box.set_margin_start(24)
+        box.set_margin_end(24)
+
+        title = Gtk.Label(label="Relatar Bug — StackOS Genesis")
+        title.add_css_class('title')
+        title.set_halign(Gtk.Align.START)
+        box.append(title)
+
+        info_lbl = Gtk.Label(label="Sua descrição e logs do sistema serão enviados para análise.\nNenhuma informação pessoal será coletada.")
+        info_lbl.add_css_class('label-blue')
+        info_lbl.set_halign(Gtk.Align.START)
+        info_lbl.set_wrap(True)
+        box.append(info_lbl)
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        card.add_css_class('card')
+        card.set_margin_top(8)
+
+        lbl_title = Gtk.Label(label="Título do problema:")
+        lbl_title.add_css_class('label-white')
+        lbl_title.set_halign(Gtk.Align.START)
+        lbl_title.set_margin_top(12)
+        lbl_title.set_margin_start(12)
+        card.append(lbl_title)
+
+        self.entry_title = Gtk.Entry()
+        self.entry_title.add_css_class('entry')
+        self.entry_title.set_placeholder_text("Ex: Rede não conecta após instalação")
+        self.entry_title.set_margin_start(12)
+        self.entry_title.set_margin_end(12)
+        card.append(self.entry_title)
+
+        lbl_desc = Gtk.Label(label="Descrição detalhada:")
+        lbl_desc.add_css_class('label-white')
+        lbl_desc.set_halign(Gtk.Align.START)
+        lbl_desc.set_margin_start(12)
+        card.append(lbl_desc)
+
+        self.text_desc = Gtk.TextView()
+        self.text_desc.add_css_class('entry')
+        self.text_desc.set_wrap_mode(Gtk.WrapMode.WORD)
+        self.text_desc.set_size_request(-1, 120)
+        self.text_desc.set_margin_start(12)
+        self.text_desc.set_margin_end(12)
+        self.text_desc.set_margin_bottom(12)
+        card.append(self.text_desc)
+
+        box.append(card)
+
+        self.status = Gtk.Label(label="")
+        self.status.add_css_class('label-blue')
+        self.status.set_halign(Gtk.Align.START)
+        box.append(self.status)
+
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        btn_box.set_halign(Gtk.Align.END)
+
+        btn_cancel = Gtk.Button(label="Cancelar")
+        btn_cancel.add_css_class('btn-secondary')
+        btn_cancel.connect('clicked', lambda b: self.win.close())
+        btn_box.append(btn_cancel)
+
+        btn_send = Gtk.Button(label="Enviar Relatório")
+        btn_send.add_css_class('btn-primary')
+        btn_send.connect('clicked', self.on_send)
+        btn_box.append(btn_send)
+
+        box.append(btn_box)
+        self.win.set_child(box)
+
+    def on_send(self, btn):
+        title = self.entry_title.get_text().strip()
+        buf = self.text_desc.get_buffer()
+        desc = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False).strip()
+
+        if not title:
+            self.status.set_text("Por favor informe o título do problema.")
+            return
+
+        self.status.set_text("Coletando informações do sistema...")
+        btn.set_sensitive(False)
+
+        def do():
+            info = get_system_info()
+            GLib.idle_add(self.status.set_text, "Enviando relatório...")
+            url = create_github_issue(f"[Bug] {title}", desc or "Sem descrição adicional.", info)
+            if url.startswith("http"):
+                GLib.idle_add(self.status.set_text, f"Enviado! Obrigado pelo relatório.")
+            else:
+                GLib.idle_add(self.status.set_text, f"Erro ao enviar: {url}")
+            GLib.idle_add(btn.set_sensitive, True)
+
+        threading.Thread(target=do, daemon=True).start()
+
+app = BugReport()
+app.run([])
