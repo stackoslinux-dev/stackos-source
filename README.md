@@ -1,22 +1,8 @@
-# StackOS Genesis — Código Fonte
+# Build nativo StackOS C3
 
-Repositório oficial do código fonte do StackOS Genesis.
+A receita Ubuntu antiga está preservada no branch backup/pre-c3-10.9-rc2-20261029. Fontes atuais: https://github.com/stackoslinux-dev/StackOS-Genesis .
 
-## Estrutura
-- `build/` — Scripts e aplicativos StackOS
-- `configs/` — Configurações do sistema
+Requer árvore de build C3 já preparada.
 
-## Recriando a ISO
-
-### Requisitos
-- Ubuntu 26.04 LTS
-- squashfs-tools, xorriso, grub-pc-bin, grub-efi-amd64-bin
-
-### Passos
-1. Instalar Ubuntu 26.04 base no chroot
-2. Copiar configs/ para /etc/
-3. Copiar build/stackos-* para /usr/local/bin/
-4. Buildar squashfs e ISO
-
-## Contato
-stackoslinux@gmail.com
+export STACKOS_BUILD_ROOT=/srv/StackOS/C3-BUILD/base-solo/C3-BUILD/boot-v10.9
+sudo -E python3 build-current.py
